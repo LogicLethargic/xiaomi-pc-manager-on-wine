@@ -72,6 +72,57 @@ Audio streaming advertises mono / 16-bit / 16 kHz under
 announces it can receive phone audio — and it is the piece that would need
 reimplementation before any Linux client could talk to a Windows peer.
 
+## The connectivity stack
+
+The main payload carries 169 non-framework assemblies. Most are third-party
+libraries (CommunityToolkit.Mvvm, FFmpeg, Boost, nlohmann/json, CommandLine),
+but a handful are Xiaomi's own and they map the connectivity protocol cleanly.
+Recovered from exported symbol names and log strings:
+
+| Layer | Assembly | Contents |
+|---|---|---|
+| Discovery | `MiScanner.dll` | `AvailableBtScanner`, `PairedBtScanner`, `BaseBtScanner`, `WifiScanner`, `RadioWatcher`, `ScannerHelper`, `IDeviceScannerCallback` |
+| Transport | `MiMultiDeviceConnection.dll` | `micont::channel`, `micont::networking`, `micont::IListener`, on Boost.ASIO |
+| Session/media | same | `mi_media::MiMultiDeviceImpl`, `CRPClient`, `CRPCBusinessMgr`, `CLyraCommonMessageMgr`, `CallbackClient` |
+| Arbitration | `ConcurrentSession.dll` | `ConcurrentSessionExecutor` — `RequestJoinSession`, `LeaveSession`, `ReportPreemptResult` |
+| Files | `lyra_dist_file_sys.dll` | distributed file transfer |
+
+### What this tells you
+
+**Discovery is Bluetooth and WiFi, not mDNS.** `MiScanner` is a native C++
+library in namespace `mi_scanner` built around BT scan callbacks plus a
+`WifiScanner`. There is no multicast service advertising anywhere in the
+payload — so there is no zeroconf-style endpoint to sniff for a device.
+
+**The transport is JSON over Boost.ASIO.** `micont` provides channel and
+networking primitives, and nlohmann/json is linked throughout. That is a
+considerably friendlier protocol than a custom binary framing would be.
+
+**Sessions are arbitrated, not just connected.** This is the part with actual
+design in it. `ConcurrentSessionExecutor` exposes `RequestJoinSession`,
+`LeaveSession` and `ReportPreemptResult`, and the embedded log strings name the
+conflict cases directly:
+
+```text
+[mi_media][lyra] OnReceiveSessionRequestResult can not find device_id =
+[mi_media][lyra] OnReceiveSessionRequestResult not a call action device_id =
+[mi_media][mi_multi_device_impl] LeavePreemptSession cur_preempt_device_id =
+```
+
+So when two clients both want the same device, one is **preempted** rather than
+merely refused. A client has to handle being the party that loses — the
+result code is delivered asynchronously and distinguished by `device_id`,
+`session_id`, `conflict_session_type` and `packet_type`.
+
+That is the single most useful thing in this repository: the surface a
+reimplementation would have to get right is not the streaming, it is session
+conflict resolution. Everything above it is JSON over sockets.
+
+> **Caveat.** This is static analysis — symbol tables, string tables and
+> embedded log messages. Nothing here is decompiled logic, and no protocol
+> implementation is included or implied. Treat it as a map of what to read
+> next, not a specification.
+
 ## Running it
 
 Minimal deployment: a bare `win64` prefix, the `05_main` payload copied in,
