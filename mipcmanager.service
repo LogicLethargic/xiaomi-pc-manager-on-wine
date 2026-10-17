@@ -1,0 +1,31 @@
+# Hardened user unit for launching Xiaomi PC Manager under Wine.
+#
+# The app currently aborts on an unimplemented ntdll call, so this unit exists
+# to reproduce that failure cleanly. The sandboxing is the part worth keeping:
+# it confines an unsupported vendor binary to its own prefix.
+
+[Unit]
+Description=Xiaomi PC Manager (Wine)
+After=network.target bluetooth.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+Environment=WINEPREFIX=%h/.local/share/mipcmanager/wine
+Environment=WINEARCH=win64
+Environment=WINEDEBUG=-all
+Environment=WINEDLLOVERRIDES=wtsapi32=n,b;msimg32=n,b
+ExecStart=%h/.local/share/mipcmanager/wine_wrapper.sh run
+Restart=on-failure
+RestartSec=5
+
+# An unsupported binary should not be able to gain rights inside the prefix.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The only writable path is the Wine prefix.
+ReadWritePaths=%h/.local/share/mipcmanager
+
+[Install]
+WantedBy=default.target
